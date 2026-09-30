@@ -60,7 +60,7 @@ At the start (the baseline), the conversion rate was 11.27% and it took 22.8 cal
 
 ## 1. Data Cleaning (MySQL)
 
-Script: bank_marketing_clean.sql
+Script: clean_data.sql
 
 - Duplicates: I found and removed 12 exact duplicate rows. That took the data from 41,188 to 41,176 clients.
 - Data types: I loaded everything as text first, then changed each column to the right type.
@@ -82,83 +82,106 @@ Unknown values by column:
 
 After cleaning I had 41,176 clients, 4,639 subscriptions, an 11.27% conversion rate and 105,735 calls.
 
-Here are the main steps from the cleaning script. I loaded everything as text first, then converted it.
+Here are the main parts of the cleaning script, taken straight from clean_data.sql (shortened in a few places).
+
+Load the raw file into a staging table. Every column is text at this stage:
 
 ```sql
--- Step 1: load the raw file with every column as text
-CREATE TABLE bank_raw (
-  age VARCHAR(10), job VARCHAR(30), marital VARCHAR(20), education VARCHAR(30),
-  has_credit_default VARCHAR(10), housing_loan VARCHAR(10), personal_loan VARCHAR(10),
-  contact VARCHAR(20), month VARCHAR(5), day_of_week VARCHAR(5),
-  duration VARCHAR(10), campaign VARCHAR(10), pdays VARCHAR(10), previous VARCHAR(10),
-  poutcome VARCHAR(20), emp_var_rate VARCHAR(10), cons_price_idx VARCHAR(10),
-  cons_conf_idx VARCHAR(10), euribor3m VARCHAR(10), nr_employed VARCHAR(10),
-  y VARCHAR(5)
-);
+CREATE TABLE stg_bank_marketing_raw (
+    row_id         INT AUTO_INCREMENT PRIMARY KEY,
+    age            VARCHAR(10),
+    job            VARCHAR(30),
+    -- ... other columns, all VARCHAR ...
+    y              VARCHAR(5)
+) ENGINE=InnoDB;
 
 LOAD DATA LOCAL INFILE 'bank-additional-full.csv'
-INTO TABLE bank_raw
-FIELDS TERMINATED BY ';' OPTIONALLY ENCLOSED BY '"'
-LINES TERMINATED BY '\n'
-IGNORE 1 LINES;
+INTO TABLE stg_bank_marketing_raw
+CHARACTER SET utf8mb4
+FIELDS TERMINATED BY ';'
+OPTIONALLY ENCLOSED BY '"'
+LINES TERMINATED BY '\r\n'
+IGNORE 1 LINES
+(age, job, marital, education, `default`, housing, loan, contact, month,
+ day_of_week, duration, campaign, pdays, previous, poutcome,
+ emp_var_rate, cons_price_idx, cons_conf_idx, euribor3m, nr_employed, y);
 ```
 
-```sql
--- Step 2: check how many unknown values each column has
-SELECT 'has_credit_default' AS col, COUNT(*) AS unknown_count,
-       ROUND(100 * COUNT(*) / (SELECT COUNT(*) FROM bank_raw), 2) AS pct
-FROM bank_raw WHERE has_credit_default = 'unknown'
-UNION ALL
-SELECT 'education', COUNT(*),
-       ROUND(100 * COUNT(*) / (SELECT COUNT(*) FROM bank_raw), 2)
-FROM bank_raw WHERE education = 'unknown';
--- (same pattern for housing_loan, personal_loan, job and marital)
-```
+Remove the exact duplicate rows by keeping only the first copy of each row:
 
 ```sql
--- Step 3: remove duplicates, fix data types and add the new columns
-CREATE TABLE bank_clean AS
-SELECT DISTINCT
-  CAST(age AS UNSIGNED)              AS age,
-  CASE
-    WHEN CAST(age AS UNSIGNED) < 30 THEN 'under 30'
-    WHEN CAST(age AS UNSIGNED) < 40 THEN '30-39'
-    WHEN CAST(age AS UNSIGNED) < 50 THEN '40-49'
-    WHEN CAST(age AS UNSIGNED) < 60 THEN '50-59'
-    ELSE '60+'
-  END                                AS age_band,
-  job, marital, education,
-  has_credit_default, housing_loan, personal_loan,
-  contact, month, day_of_week,
-  CAST(campaign AS UNSIGNED)         AS campaign,
-  CASE
-    WHEN CAST(campaign AS UNSIGNED) = 1 THEN '1'
-    WHEN CAST(campaign AS UNSIGNED) = 2 THEN '2'
-    WHEN CAST(campaign AS UNSIGNED) <= 5 THEN '3-5'
-    ELSE '6+'
-  END                                AS campaign_bucket,
-  CAST(pdays AS SIGNED)              AS pdays,
-  CASE WHEN pdays = '999' THEN 0 ELSE 1 END AS previously_contacted,
-  CAST(previous AS UNSIGNED)         AS previous,
-  poutcome,
-  CAST(emp_var_rate AS DECIMAL(5,2))     AS emp_var_rate,
-  CAST(cons_price_idx AS DECIMAL(6,3))   AS cons_price_idx,
-  CAST(cons_conf_idx AS DECIMAL(5,1))    AS cons_conf_idx,
-  CAST(euribor3m AS DECIMAL(6,3))        AS euribor3m,
-  CAST(nr_employed AS DECIMAL(7,1))      AS nr_employed,
-  y
-  -- duration is left out on purpose (only known after the call)
-FROM bank_raw;
+WITH numbered AS (
+    SELECT r.*,
+           ROW_NUMBER() OVER (
+               PARTITION BY age, job, marital, education, `default`, housing, loan,
+                            contact, month, day_of_week, duration, campaign, pdays,
+                            previous, poutcome, emp_var_rate, cons_price_idx,
+                            cons_conf_idx, euribor3m, nr_employed, y
+               ORDER BY row_id
+           ) AS copy_number
+    FROM stg_bank_marketing_raw r
+),
+deduped AS (
+    SELECT * FROM numbered WHERE copy_number = 1
+)
 ```
 
+Convert the data types and make the new columns (age_band, campaign_bucket and previously_contacted). The duration column is saved as duration_sec_do_not_model so I don't use it by mistake:
+
 ```sql
--- Step 4: check the totals and the baseline numbers
-SELECT COUNT(*)                                   AS clients,        -- 41,176
-       SUM(y = 'yes')                             AS subscriptions,  -- 4,639
-       ROUND(100 * SUM(y = 'yes') / COUNT(*), 2)  AS conversion_pct, -- 11.27
-       SUM(campaign)                              AS total_calls,    -- 105,735
-       ROUND(SUM(campaign) / SUM(y = 'yes'), 1)   AS calls_per_sub   -- 22.8
-FROM bank_clean;
+INSERT INTO bank_marketing_clean (...)
+SELECT
+    CAST(age AS UNSIGNED),
+    CASE
+        WHEN CAST(age AS UNSIGNED) < 30 THEN 'under_30'
+        WHEN CAST(age AS UNSIGNED) BETWEEN 30 AND 39 THEN '30_39'
+        WHEN CAST(age AS UNSIGNED) BETWEEN 40 AND 49 THEN '40_49'
+        WHEN CAST(age AS UNSIGNED) BETWEEN 50 AND 59 THEN '50_59'
+        ELSE 'sixty_plus'
+    END,
+    job, marital, education,
+    `default`, housing, loan,
+    contact, month, day_of_week,
+    CAST(campaign AS UNSIGNED),
+    CASE
+        WHEN CAST(campaign AS UNSIGNED) = 1 THEN '1'
+        WHEN CAST(campaign AS UNSIGNED) = 2 THEN '2'
+        WHEN CAST(campaign AS UNSIGNED) BETWEEN 3 AND 5 THEN '3_5'
+        ELSE '6_plus'
+    END,
+    CAST(pdays AS UNSIGNED),
+    CASE WHEN CAST(pdays AS UNSIGNED) = 999 THEN 0 ELSE 1 END,
+    -- ... other columns cast to the right type ...
+    y,
+    CAST(duration AS UNSIGNED)
+FROM deduped
+ORDER BY row_id;
+```
+
+Check how many duplicates were removed, then check the baseline numbers:
+
+```sql
+SELECT
+    (SELECT COUNT(*) FROM stg_bank_marketing_raw) - COUNT(*) AS duplicate_rows_removed,
+    COUNT(*) AS clients_after_cleaning
+FROM bank_marketing_clean;
+
+SELECT
+    COUNT(*)                                             AS clients,
+    SUM(y = 'yes')                                       AS subscriptions,
+    ROUND(SUM(y = 'yes') / COUNT(*) * 100, 2)            AS conversion_rate_pct,
+    SUM(campaign)                                        AS total_calls,
+    ROUND(SUM(campaign) / SUM(y = 'yes'), 1)             AS calls_per_subscription
+FROM bank_marketing_clean;
+```
+
+The unknown-values check uses the same pattern for each column (this one is for has_credit_default):
+
+```sql
+SELECT 'has_credit_default' AS column_name,
+       SUM(has_credit_default = 'unknown') AS unknown_count,
+       ROUND(SUM(has_credit_default = 'unknown') / COUNT(*) * 100, 2) AS pct_of_clients
+FROM bank_marketing_clean;
 ```
 
 ---
@@ -192,43 +215,6 @@ Other things I noticed:
 - Month matters. March, August and December convert best. May, June and November convert worst.
 - Day of the week doesn't really matter. Monday to Friday look almost the same.
 - Past success matters the most. Clients who said yes to an earlier campaign convert at 65.1%, compared to 9.4% for everyone else.
-
-These are the queries I used to get the numbers for the dashboard pages.
-
-```sql
--- Conversion by number of calls to the same client
-SELECT campaign_bucket,
-       COUNT(*)                                   AS clients,
-       ROUND(100 * SUM(y = 'yes') / COUNT(*), 1)  AS conversion_pct
-FROM bank_clean
-GROUP BY campaign_bucket
-ORDER BY campaign_bucket;
-
--- Conversion and calls per subscription by contact channel
-SELECT contact,
-       ROUND(100 * SUM(y = 'yes') / COUNT(*), 2)  AS conversion_pct,
-       ROUND(SUM(campaign) / SUM(y = 'yes'), 1)   AS calls_per_sub
-FROM bank_clean
-GROUP BY contact;
-
--- Conversion by month
-SELECT month,
-       ROUND(100 * SUM(y = 'yes') / COUNT(*), 2)  AS conversion_pct
-FROM bank_clean
-GROUP BY month
-ORDER BY conversion_pct DESC;
-
--- Conversion by previous campaign outcome
-SELECT poutcome,
-       ROUND(100 * SUM(y = 'yes') / COUNT(*), 1)  AS conversion_pct
-FROM bank_clean
-GROUP BY poutcome;
-
--- Share of calls vs share of subscriptions for clients called 6+ times
-SELECT ROUND(100 * SUM(CASE WHEN campaign_bucket = '6+' THEN campaign END) / SUM(campaign), 1) AS pct_of_calls,
-       ROUND(100 * SUM(CASE WHEN campaign_bucket = '6+' AND y = 'yes' THEN 1 END) / SUM(y = 'yes'), 1) AS pct_of_subs
-FROM bank_clean;
-```
 
 ---
 
@@ -264,73 +250,88 @@ I then ranked the clients by their predicted chance of subscribing and split the
 
 If we only call the top 10% of clients, we capture 42% of all subscriptions. That is over 4 times better than calling at random.
 
-Here are the main steps from the R script.
+Here are the main parts of the R script, taken from analysis_model.R (shortened in a few places).
+
+Load the cleaned data from MySQL and check it against the baseline numbers:
 
 ```r
+library(DBI)
+library(RMariaDB)
 library(dplyr)
+library(broom)
 library(pROC)
+library(caret)
 
-# Read the cleaned data (exported from MySQL as bank_clean.csv)
-bank <- read.csv("bank_clean.csv", stringsAsFactors = TRUE)
-bank$y <- ifelse(bank$y == "yes", 1, 0)
-
-# Split 70% train, 30% test
-set.seed(123)
-train_rows <- sample(nrow(bank), size = 0.7 * nrow(bank))
-train <- bank[train_rows, ]
-test  <- bank[-train_rows, ]
-
-# Logistic regression using only information known before the call
-# (duration is not included)
-model <- glm(
-  y ~ age + job + poutcome + previously_contacted + campaign_bucket +
-      contact + month + emp_var_rate + cons_price_idx +
-      cons_conf_idx + euribor3m,
-  data = train,
-  family = binomial
+con <- dbConnect(
+  RMariaDB::MariaDB(),
+  dbname   = "bank_marketing",
+  host     = "localhost",
+  port     = 3306,
+  user     = Sys.getenv("BANK_DB_USER"),
+  password = Sys.getenv("BANK_DB_PASSWORD")
 )
+bank <- dbGetQuery(con, "SELECT * FROM bank_marketing_clean")
+dbDisconnect(con)
 
-# Odds ratios (above 1 = more likely to subscribe, below 1 = less likely)
-odds_ratios <- exp(coef(model))
-round(sort(odds_ratios, decreasing = TRUE), 2)
-```
-
-```r
-# Predict on the test set and check AUC
-test$prob <- predict(model, newdata = test, type = "response")
-roc_obj <- roc(test$y, test$prob)
-auc(roc_obj)   # about 0.79
-```
-
-```r
-# Rank clients into 10 groups (deciles) and work out the lift
-lift_table <- test %>%
-  mutate(decile = ntile(-prob, 10)) %>%   # decile 1 = highest predicted chance
-  group_by(decile) %>%
-  summarise(clients = n(), subs = sum(y)) %>%
+bank <- bank %>%
   mutate(
-    cum_clients_pct = cumsum(clients) / sum(clients),
-    cum_subs_pct    = cumsum(subs) / sum(subs),
-    lift            = cum_subs_pct / cum_clients_pct
+    y_flag = ifelse(y == "yes", 1, 0),
+    across(c(job, marital, education, has_credit_default, housing_loan,
+             personal_loan, contact_type, contact_month, contact_dow,
+             poutcome, age_band, campaign_bucket), as.factor)
   )
 
-lift_table
+cat("Clients:", nrow(bank), "(expected 41,176)\n")
+cat("Subscriptions:", sum(bank$y_flag), "(expected 4,639)\n")
 ```
 
-```r
-# Statistical tests used in the recommendations
-# Past campaign success vs everyone else (difference in proportions with 95% CI)
-prop.test(
-  x = c(sum(bank$y[bank$poutcome == "success"]),
-        sum(bank$y[bank$poutcome != "success"])),
-  n = c(sum(bank$poutcome == "success"),
-        sum(bank$poutcome != "success"))
-)
+Split the data 70/30 and fit the logistic regression. I dropped duration (only known after the call) and the raw pdays and campaign columns, because I use previously_contacted and campaign_bucket instead:
 
-# Effect size (Cramer's V) for month and weekday
-library(rcompanion)
-cramerV(table(bank$month, bank$y))
-cramerV(table(bank$day_of_week, bank$y))
+```r
+model_data <- bank %>%
+  select(-client_id, -y, -duration_sec_do_not_model, -pdays, -campaign) %>%
+  na.omit()
+
+set.seed(42)
+train_idx <- createDataPartition(model_data$y_flag, p = 0.7, list = FALSE)
+train <- model_data[train_idx, ]
+test  <- model_data[-train_idx, ]
+
+model <- glm(y_flag ~ ., data = train, family = binomial)
+```
+
+Get the odds ratios:
+
+```r
+odds_ratios <- tidy(model, exponentiate = TRUE, conf.int = TRUE) %>%
+  filter(term != "(Intercept)") %>%
+  arrange(desc(estimate))
+```
+
+Check the model on the test set (AUC) and build the decile lift table:
+
+```r
+test$pred_prob <- predict(model, newdata = test, type = "response")
+
+roc_obj <- roc(test$y_flag, test$pred_prob)
+cat("AUC:", round(auc(roc_obj), 2), "\n")
+
+# Rank clients by predicted probability and split into 10 equal groups
+test <- test %>%
+  arrange(desc(pred_prob)) %>%
+  mutate(decile = ntile(desc(pred_prob), 10))
+
+gains <- test %>%
+  group_by(decile) %>%
+  summarise(clients = n(), subscriptions = sum(y_flag)) %>%
+  arrange(decile) %>%
+  mutate(
+    cum_clients       = cumsum(clients),
+    cum_subs          = cumsum(subscriptions),
+    pct_clients       = cum_clients / sum(clients),
+    pct_subs_captured = cum_subs / sum(subscriptions),
+    lift              = pct_subs_captured / pct_clients
+  )
 ```
 
 ---
@@ -348,6 +349,16 @@ The numbers:
 - Conversion is 65.1% for clients with a successful earlier campaign, compared to 9.4% for everyone else.
 - That is a gap of 55.7 percentage points (95% CI: 53.2 to 58.2). This is too big to be chance (p < 0.001).
 - Previous campaign outcome is the strongest single factor in the data (Cramér's V = 0.32, which is a medium to large effect).
+
+```r
+# Conversion: success vs everyone else, with 95% CI on the difference
+print(prop.test(c(x_success, x_rest), c(n_success, n_rest), correct = FALSE))
+
+# Strength of the effect (Cramer's V)
+tab_poutcome <- table(bank$poutcome, bank$y)
+print(chisq.test(tab_poutcome))
+print(cramerV(tab_poutcome))
+```
 
 ### 2. Call clients in the order the model ranks them
 
@@ -369,6 +380,22 @@ The numbers:
 - The drop from 3 to 5 calls down to 6+ calls is statistically significant (p < 0.001). So is the drop from 1 call to 2 calls (p = 0.0001).
 - Clients called 6+ times use 30.6% of all calls but only produce 4.0% of subscriptions.
 
+```r
+h2_summary <- bank %>%
+  group_by(campaign_bucket) %>%
+  summarise(clients = n(),
+            subscriptions = sum(y_flag),
+            conversion_rate = subscriptions / clients,
+            calls = sum(campaign)) %>%
+  mutate(share_of_calls         = calls / sum(calls),
+         share_of_subscriptions = subscriptions / sum(subscriptions)) %>%
+  arrange(campaign_bucket)
+
+# 1 call vs 2 calls, and 3-5 calls vs 6+ calls
+print(prop.test(x = h2_summary$subscriptions[1:2], n = h2_summary$clients[1:2]))
+print(prop.test(x = h2_summary$subscriptions[3:4], n = h2_summary$clients[3:4]))
+```
+
 ### 4. Use mobile numbers first
 
 In simple terms: clients reached on a mobile phone are almost three times as likely to subscribe as clients reached on a landline, and it takes far fewer calls to get each sale.
@@ -378,6 +405,17 @@ The numbers:
 - Conversion is 14.74% on mobile and 5.23% on landline. That is a gap of about 9.5 percentage points (95% CI: 8.9 to 10.1).
 - A mobile sale takes 16.3 calls on average, compared to 54.5 calls on a landline.
 - The model agrees. Landline contact roughly halves the odds of subscribing (odds ratio 0.47), even after taking the other factors into account.
+
+```r
+chan_summary <- bank %>%
+  group_by(contact_type) %>%
+  summarise(clients = n(),
+            subscriptions = sum(y_flag),
+            conversion_rate = subscriptions / clients,
+            calls_per_subscription = sum(campaign) / subscriptions)
+
+print(prop.test(c(x_cell, x_tel), c(n_cell, n_tel), correct = FALSE))
+```
 
 ### 5. Focus campaigns on March, August and December
 
@@ -399,6 +437,11 @@ Month is the second strongest factor in the data (Cramér's V = 0.275). It is st
 In simple terms: Monday to Friday perform almost the same, so there is nothing to gain from moving calls between weekdays.
 
 The numbers: the effect of weekday is close to zero (Cramér's V = 0.025). The result can be detected because the dataset is large, but the difference is too small to matter in real life.
+
+```r
+cat("Month:      ", round(cramerV(table(bank$contact_month, bank$y)), 3), "\n")
+cat("Day of week:", round(cramerV(table(bank$contact_dow,   bank$y)), 3), "\n")
+```
 
 ### Summary
 
@@ -439,7 +482,7 @@ Download it and use the file bank-additional/bank-additional-full.csv. It is sep
 ### How to reproduce
 
 1. Clean: load bank-additional-full.csv into MySQL and run clean_data.sql. This makes the cleaned table used in the later steps (41,176 clients, 4,639 subscriptions).
-2. Model: run analysis_model.R. It reads the cleaned data, fits the logistic regression, and prints the odds ratios and the decile lift table.
+2. Model: run analysis_model.R. It connects to MySQL (set the BANK_DB_USER and BANK_DB_PASSWORD environment variables first), reads the cleaned table, fits the logistic regression, and prints the odds ratios and the decile lift table.
 3. Dashboard: open dashboard.twb in Tableau, or look at the screenshots in images/.
 
 Citation: S. Moro, P. Cortez and P. Rita. A Data-Driven Approach to Predict the Success of Bank Telemarketing. Decision Support Systems, 2014. doi:10.1016/j.dss.2014.03.001
