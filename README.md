@@ -20,18 +20,6 @@ What I found:
 - Mobile converts at 14.74% and landline at 5.23%. A mobile sale takes 16.3 calls and a landline sale takes 54.5 calls.
 - March, August and December are the best months. May, June and November are the worst. Day of the week makes almost no difference.
 - The model has an AUC of 0.79. Calling only the top 10% of clients, ranked by the model, captures 42.3% of all subscriptions, which is 4.2 times better than calling at random.
-
-What I recommend:
-
-1. Call past customers first.
-2. Call clients in the order the model ranks them.
-3. Stop after 5 calls per client.
-4. Use mobile numbers first.
-5. Focus campaigns on March, August and December.
-6. Don't plan the calling schedule around the day of the week.
-
-Before changing the whole operation, the ranked list and the 5-call cap should be tested on a small batch of future calls. The data is from one bank in 2008 to 2010, and these are patterns in past data, not proven causes.
-
 ---
 
 ## The Problem
@@ -54,7 +42,7 @@ At the start (the baseline), the conversion rate was 11.27% and it took 22.8 cal
 1. Clean the data in MySQL. I removed duplicates, fixed data types, dealt with the "unknown" values, and made age groups and call-count groups.
 2. Explore the data in Tableau Public. I built a dashboard showing conversion by number of calls, month, channel and customer segment.
 3. Build a model in R. I fitted a logistic regression to predict who is most likely to subscribe, then ranked the clients into deciles.
-4. Write recommendations for the campaign manager (this README).
+4. Wrote recommendations for the campaign manager.
 
 ---
 
@@ -190,9 +178,7 @@ FROM bank_marketing_clean;
 
 The dashboard has four pages: Campaign Overview, Customer Segments, Contact Volume and Timing, and Channel, Day and Model Insights.
 
-Live dashboard: add your Tableau Public URL here
-
-The workbook (dashboard.twb) or screenshots (images/) are in this repo.
+The workbook (Bank_Marketing_Analysis.twbx) 
 
 What I found:
 
@@ -250,7 +236,7 @@ I then ranked the clients by their predicted chance of subscribing and split the
 
 If we only call the top 10% of clients, we capture 42% of all subscriptions. That is over 4 times better than calling at random.
 
-Here are the main parts of the R script, taken from analysis_model.R (shortened in a few places).
+Here are the main parts of the R script, taken from analysis_model.R (script snippet).
 
 Load the cleaned data from MySQL and check it against the baseline numbers:
 
@@ -452,7 +438,7 @@ cat("Day of week:", round(cramerV(table(bank$contact_dow,   bank$y)), 3), "\n")
 - Focus on March, August and December: March odds are 4.4 times higher
 - Ignore day of week: effect size is 0.025 (very small)
 
-Next step: these results come from past data. Before changing the whole operation, I recommend testing the ranked list and the 5-call cap on a small batch of future calls and comparing the results with the current way of doing things.
+These results come from past data. Before changing the whole operation, I recommend testing the ranked list and the 5-call cap on a small batch of future calls and comparing the results with the current way of doing things.
 
 ---
 
