@@ -422,7 +422,7 @@ Month is the second strongest factor in the data (Cramér's V = 0.275). It is st
 
 In simple terms: Monday to Friday perform almost the same, so there is nothing to gain from moving calls between weekdays.
 
-The numbers: the effect of weekday is close to zero (Cramér's V = 0.025). The result can be detected because the dataset is large, but the difference is too small to matter in real life.
+The numbers: the effect of the weekday is close to zero (Cramér's V = 0.025). The result can be detected because the dataset is large, but the difference is too small to matter in real life.
 
 ```r
 cat("Month:      ", round(cramerV(table(bank$contact_month, bank$y)), 3), "\n")
@@ -469,7 +469,7 @@ Download it and use the file bank-additional/bank-additional-full.csv. It is sep
 ### How to reproduce
 
 1. Clean: load bank-additional-full.csv into MySQL and run clean_data.sql. This makes the cleaned table used in the later steps (41,176 clients, 4,639 subscriptions).
-2. Model: run analysis_model.R. It connects to MySQL (set the BANK_DB_USER and BANK_DB_PASSWORD environment variables first), reads the cleaned table, fits the logistic regression, and prints the odds ratios and the decile lift table.
-3. Dashboard: open dashboard.twb in Tableau, or look at the screenshots in images/.
+2. Model: run analysis_model.R. It connects to MySQL, reads the cleaned table, fits the logistic regression, and prints the odds ratios and the decile lift table.
+3. Dashboard: open Bank_Marketing_Analysis.twbx in Tableau, or look at the screenshots in images/.
 
 Citation: S. Moro, P. Cortez and P. Rita. A Data-Driven Approach to Predict the Success of Bank Telemarketing. Decision Support Systems, 2014. doi:10.1016/j.dss.2014.03.001
