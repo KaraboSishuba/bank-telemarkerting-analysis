@@ -452,12 +452,11 @@ These results come from past data. Before changing the whole operation, I recomm
 
 ## Repository
 
-```
+
 bank-additional-full.csv   - the dataset
 clean_data.sql             - data cleaning and feature preparation (MySQL)
 analysis_model.R           - logistic regression, odds ratios, decile lift
 dashboard.twb (or images/) - Tableau dashboard workbook or screenshots
-```
 
 ### Get the data
 
